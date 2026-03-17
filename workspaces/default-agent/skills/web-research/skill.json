@@ -1,0 +1,8 @@
+{
+  "name": "web-research",
+  "description": "Use web search and URL reading to gather current external information.",
+  "enabled_tools": ["search_web", "read_url"],
+  "disabled_tools": [],
+  "allow_tools": ["search_web", "read_url", "list_files", "read_file", "get_datetime"],
+  "deny_tools": []
+}

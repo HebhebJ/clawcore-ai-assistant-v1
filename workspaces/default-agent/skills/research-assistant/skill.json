@@ -1,0 +1,8 @@
+{
+  "name": "research-assistant",
+  "description": "Research-focused behavior profile for source-aware answers.",
+  "enabled_tools": [],
+  "disabled_tools": [],
+  "allow_tools": ["list_files", "read_file", "get_datetime"],
+  "deny_tools": []
+}

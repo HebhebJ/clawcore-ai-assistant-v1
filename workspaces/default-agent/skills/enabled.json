@@ -1,0 +1,14 @@
+{
+  "enabled_tools": [
+    "list_files",
+    "read_file",
+    "get_datetime",
+    "search_web",
+    "read_url"
+  ],
+  "disabled_tools": [],
+  "enabled_skills": [
+    "research-assistant",
+    "web-research"
+  ]
+}

@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+.env
+
+# Runtime workspace data (can include private conversation/memory traces)
+workspaces/*/sessions/
+workspaces/*/memory/
