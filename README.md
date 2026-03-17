@@ -1,40 +1,93 @@
-# ClawCore
+<p align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f172a,100:1e293b&height=140&section=header&text=ClawCore&fontColor=38bdf8&fontSize=40&animation=fadeIn" />
+</p>
 
-ClawCore is a local-first, workspace-based AI assistant runtime inspired by OpenClaw.
+<p align="center">
+  <b>Local-first  Workspace-driven  Memory-native AI runtime</b><br/>
+  Inspired by OpenClaw
+</p>
 
-## MVP included
+<p align="center">
+  <img src="https://img.shields.io/badge/status-MVP-blue?style=flat-square" />
+  <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat-square" />
+  <img src="https://img.shields.io/badge/LLM-kimi%20%7C%20mock-purple?style=flat-square" />
+  <img src="https://img.shields.io/badge/api-FastAPI-green?style=flat-square" />
+  <img src="https://img.shields.io/badge/channel-telegram-26A5E4?style=flat-square" />
+</p>
 
-- Workspace loader for `AGENT.md`, `SOUL.md`, `TOOLS.md`, `USER.md`, `BOOTSTRAP.md`
-- Session persistence (`transcript.jsonl`, `state.json`, `summary.md`, `tool_calls.jsonl`)
-- Context builder that layers workspace files + history + memory + tools + user input
-- Structured reason/act loop with max-step safeguards
-- Tool registry with safe built-in tools:
+---
+
+## Overview
+
+ClawCore is a local-first AI agent runtime built around:
+
+- Workspaces as intelligence units
+- Persistent memory + summarization
+- Structured reasoning/acting loops
+- Tool-driven execution
+
+---
+
+## MVP Included
+
+```text
+Workspace -> Context -> Reason -> Act -> Persist -> Repeat
+```
+
+- Workspace loader:
+  - `AGENT.md`, `SOUL.md`, `TOOLS.md`, `USER.md`, `BOOTSTRAP.md`
+- Session persistence:
+  - `transcript.jsonl`
+  - `state.json`
+  - `summary.md`
+  - `tool_calls.jsonl`
+- Context builder:
+  - workspace + history + memory + tools + user input
+- Agent loop:
+  - structured reason/act cycle
+  - max-step safeguards
+  - one repair retry for malformed/unsupported action output
+- Tool registry (safe built-ins):
   - `list_files`
   - `read_file`
   - `get_datetime`
   - `search_web`
   - `read_url`
-- FastAPI endpoint: `POST /chat`
-- Provider factory with `kimi` (default) and `mock`
+- Interfaces:
+  - FastAPI -> `POST /chat`
+  - CLI -> `python -m src.cli.chat`
+  - Telegram webhook -> `POST /webhook/telegram`
+- Providers:
+  - `kimi` (default)
+  - `mock` (offline)
 
-## Run
+---
+
+## Quick Start
+
+### Install
 
 ```bash
 python -m pip install -e .
 ```
 
-Create/edit `.env` in the project root (already included in this repo):
+### Configure `.env`
 
 ```bash
+# LLM
 LLM_PROVIDER=kimi
 KIMI_API_KEY=your_key_here
-KIMI_MODEL=kimi-k2-0711-preview
+KIMI_MODEL=kimi-k2.5
 KIMI_BASE_URL=https://api.moonshot.ai/v1
 KIMI_TIMEOUT_SECONDS=60
 KIMI_TEMPERATURE=1
 KIMI_MAX_TOKENS=800
+
+# Memory
 MEMORY_DISTILL_EVERY_TURNS=6
 MEMORY_RETRIEVAL_MODE=hybrid
+
+# Summary
 SUMMARY_UPDATER_PROVIDER=ollama
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_SUMMARY_MODEL=gpt-oss:20b
@@ -45,10 +98,14 @@ SUMMARY_TIMEOUT_SECONDS=30
 SUMMARY_TEMPERATURE=0.1
 SUMMARY_OLLAMA_MAX_FAILURES=3
 SUMMARY_OLLAMA_COOLDOWN_SECONDS=60
+
+# Telegram
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=
 TELEGRAM_WORKSPACE_ID=default-agent
 TELEGRAM_TIMEOUT_SECONDS=20
+
+# Telegram auto-setup
 TELEGRAM_AUTO_SETUP=false
 TELEGRAM_AUTO_NGROK=false
 TELEGRAM_PUBLIC_BASE_URL=
@@ -58,31 +115,29 @@ NGROK_PATH=ngrok
 NGROK_AUTHTOKEN=
 ```
 
-Start API:
+---
+
+### Run API
 
 ```bash
 uvicorn src.core.app:app --reload
 ```
 
-Run CLI (no API server needed):
+### CLI
 
 ```bash
 python -m src.cli.chat
-```
-
-Or after install:
-
-```bash
+# or after install
 clawcore-chat
 ```
 
-One-shot message mode:
+One-shot:
 
 ```bash
 python -m src.cli.chat --message "List workspace files"
 ```
 
-Call chat:
+### API Call
 
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
@@ -90,25 +145,122 @@ curl -X POST http://127.0.0.1:8000/chat \
   -d '{"workspace_id":"default-agent","session_id":"session-001","message":"List workspace files"}'
 ```
 
-Telegram webhook:
+---
 
-- Endpoint: `POST /webhook/telegram`
-- Session mapping:
-  - Default first session: `tg-<chat_id>`
-  - `/new` rotates to a fresh session id: `tg-<chat_id>-<utc-stamp>`
-  - `/exit` closes current session; next message starts fresh
-- Telegram chat commands:
-  - `/new` flush memory for current session and start a new one
-  - `/exit` flush memory and close current session
-  - `/session` show current active session id
-  - `/help` list Telegram commands
-- If `TELEGRAM_WEBHOOK_SECRET` is set, requests must include header `X-Telegram-Bot-Api-Secret-Token`.
-- Optional startup auto-setup:
-  - `TELEGRAM_AUTO_SETUP=true` enables webhook auto registration at backend startup.
-  - Use `TELEGRAM_PUBLIC_BASE_URL=https://...` if you already have a public URL.
-  - Or set `TELEGRAM_AUTO_NGROK=true` (+ `NGROK_AUTHTOKEN`) to auto-start ngrok and register webhook.
+## Memory System
 
-Set Telegram webhook:
+```mermaid
+flowchart LR
+    U[User Message] --> C[Rule Classifier]
+    C --> S[(facts.jsonl / notes.jsonl)]
+    S --> V[(embeddings.jsonl)]
+    S --> R[Retriever]
+    V --> R
+    R --> X[Context Builder]
+```
+
+### Write Path
+
+- Per-turn rule classifier stores durable facts/tasks.
+- Session distillation runs every `MEMORY_DISTILL_EVERY_TURNS` turns.
+- Distillation also runs on flush events:
+  - CLI: `/new`, `/exit`
+  - Telegram: `/new`, `/exit`
+
+### Manual Memory Triggers
+
+You can force memory capture with explicit phrasing:
+
+- `save to your memory: <fact>`
+- `memorize that <fact>`
+- `note this: <fact>`
+
+### Retrieval Modes
+
+```bash
+MEMORY_RETRIEVAL_MODE=hybrid
+MEMORY_RETRIEVAL_MODE=vector
+MEMORY_RETRIEVAL_MODE=keyword
+```
+
+- `hybrid`: vector ranking + keyword fill
+- `vector`: semantic retrieval only
+- `keyword`: lexical matching only
+
+### Storage
+
+- `workspaces/<id>/memory/facts.jsonl`
+- `workspaces/<id>/memory/notes.jsonl`
+- `workspaces/<id>/memory/embeddings.jsonl`
+
+---
+
+## Session Summarization
+
+- Incremental turn updates (`SUMMARY_DELTA_MAX_LINES`)
+- Auto-compaction (`SUMMARY_TOKEN_CAP`, `SUMMARY_COMPACT_TARGET_TOKENS`)
+- Background queue (non-blocking for chat response path)
+
+### Providers
+
+- `SUMMARY_UPDATER_PROVIDER=ollama` (default)
+- `SUMMARY_UPDATER_PROVIDER=heuristic`
+
+### Ollama Reliability
+
+If Ollama fails repeatedly, summary updater falls back safely:
+
+- `SUMMARY_OLLAMA_MAX_FAILURES` (default `3`)
+- `SUMMARY_OLLAMA_COOLDOWN_SECONDS` (default `60`)
+
+This avoids one-time permanent disable.
+
+---
+
+## Token Usage
+
+Each response includes:
+
+- `prompt_tokens`
+- `completion_tokens`
+- `session_prompt_tokens_total`
+- `session_completion_tokens_total`
+- `context_tokens_estimate`
+- `context_chars`
+
+CLI also prints:
+
+- `memory_mode`
+- `memory_hits`
+- summary queue status
+- memory distill status
+
+---
+
+## Telegram Integration
+
+### Endpoint
+
+```text
+POST /webhook/telegram
+```
+
+### Commands
+
+- `/help` -> show commands
+- `/session` -> show active session id
+- `/new` -> flush + rotate to new session
+- `/exit` -> flush + close current session
+
+### Session Behavior
+
+- First session defaults to `tg-<chat_id>`
+- `/new` creates `tg-<chat_id>-<utc-stamp>`
+- After `/exit`, next message starts fresh
+
+### Setup
+
+Manual webhook:
 
 ```bash
 curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
@@ -116,80 +268,103 @@ curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
   -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
 ```
 
-Or use helper script:
+Helper script:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup_telegram_webhook.ps1 -PublicBaseUrl "https://<your-domain>"
 ```
 
-For local offline behavior, set this in `.env`:
+Auto setup options:
+
+- `TELEGRAM_AUTO_SETUP=true`
+- Either set `TELEGRAM_PUBLIC_BASE_URL=https://...`
+- Or set `TELEGRAM_AUTO_NGROK=true` + `NGROK_AUTHTOKEN`
+
+---
+
+## Workspace Tool Policy (v1)
+
+Resolution order:
+
+```text
+Global Tools
+  -> workspaces/<id>/skills/enabled.json
+  -> TOOLS.md (allow/deny)
+```
+
+`skills/enabled.json` supports:
+
+```json
+{
+  "enabled_tools": ["tool_a"],
+  "disabled_tools": ["tool_x"],
+  "enabled_skills": ["research-assistant"]
+}
+```
+
+`TOOLS.md` directives:
+
+```text
+allow: tool_a, tool_b
+deny: tool_x, tool_y
+```
+
+Rules:
+
+- `allow` narrows toolset
+- `deny` always wins
+- unknown tools are skipped
+
+---
+
+## Skills System
+
+Skill folder shape:
+
+```text
+workspaces/<id>/skills/<skill-name>/
+  skill.json
+  SKILL.md
+```
+
+- `SKILL.md` instructions are injected into context.
+- `skill.json` can override tool access (`enabled_tools`, `disabled_tools`, `allow_tools`, `deny_tools`).
+
+---
+
+## Errors and Reliability
+
+- Missing `KIMI_API_KEY` or `KIMI_MODEL` when provider is `kimi` -> config error.
+- Upstream provider failures map to HTTP `502` from `/chat`.
+- Kimi provider performs one retry for transient `429`/`5xx`/timeout failures.
+
+---
+
+## Offline Mode
 
 ```bash
 LLM_PROVIDER=mock
 ```
 
-## Errors
+---
 
-- Missing `KIMI_API_KEY`/`KIMI_MODEL` with `LLM_PROVIDER=kimi` returns config error.
-- Upstream provider failures map to HTTP 502 from `/chat`.
+## Architecture
 
-## Memory behavior
+```mermaid
+flowchart TD
+    A[Workspace Files] --> B[Context Builder]
+    M[Memory Retrieval] --> B
+    S[Session Summary] --> B
+    B --> C[LLM Provider]
+    C --> D[Reason/Act Loop]
+    D --> E[Tool Execution]
+    D --> F[Persistence]
+    F --> S
+    F --> M
+```
 
-- Per-turn memory classifier attempts to store durable facts.
-- You can force memory capture with explicit phrasing such as:
-  - `save to your memory: <fact>`
-  - `memorize that <fact>`
-  - `note this: <fact>`
-- Session distillation runs every `MEMORY_DISTILL_EVERY_TURNS` user turns.
-- CLI also triggers a final memory distill on `/exit` and before `/new`.
-- Memory retrieval defaults to `hybrid` mode (vector + keyword), configurable via:
-  - `MEMORY_RETRIEVAL_MODE=hybrid` (default)
-  - `MEMORY_RETRIEVAL_MODE=vector`
-  - `MEMORY_RETRIEVAL_MODE=keyword`
-- Vector index is stored at `workspaces/<id>/memory/embeddings.jsonl`.
-- Session summary appends a max `SUMMARY_DELTA_MAX_LINES` turn delta and auto-compacts when it exceeds `SUMMARY_TOKEN_CAP`.
-- Summary updater can use local Ollama (`SUMMARY_UPDATER_PROVIDER=ollama`) with automatic heuristic fallback.
-- Ollama summary fallback uses a failure threshold + cooldown (defaults: `SUMMARY_OLLAMA_MAX_FAILURES=3`, `SUMMARY_OLLAMA_COOLDOWN_SECONDS=60`) instead of one-time permanent disable.
-- Summary updates are queued in the background (non-blocking for chat responses).
-- CLI prints summary queue status as `summary> queued=True provider=... token_cap=...`.
+---
 
-## Token usage
-
-- Each response now includes token metrics:
-  - per-turn `prompt_tokens` and `completion_tokens`
-  - cumulative session totals `session_prompt_tokens_total` and `session_completion_tokens_total`
-  - `context_tokens_estimate` and `context_chars`
-- Kimi uses provider usage values when available.
-- Mock provider uses a lightweight token estimate.
-- If the model returns an unsupported action format, the loop now retries once with a repair hint before stopping safely.
-
-## Workspace tool policy (v1)
-
-- Effective tools are resolved per request as:
-  - global registered tools
-  - + `workspaces/<id>/skills/enabled.json`
-  - + `TOOLS.md` directives
-- `skills/enabled.json` supports:
-  - `enabled_tools: ["tool_a", ...]`
-  - `disabled_tools: ["tool_x", ...]` (optional)
-- `TOOLS.md` supports simple directives:
-  - `allow: tool_a, tool_b`
-  - `deny: tool_x, tool_y`
-- Precedence:
-  - workspace config is applied first
-  - `allow` narrows toolset
-  - `deny` applies last and always wins
-- Unknown tool names are skipped with warnings.
-- If `enabled.json` is missing, all globally registered tools remain available.
-
-## Workspace skills (manifest-based)
-
-- Activate skills in `workspaces/<id>/skills/enabled.json`:
-  - `enabled_skills: ["research-assistant"]`
-- Each skill lives in `workspaces/<id>/skills/<skill-name>/` and can include:
-  - `skill.json` (manifest)
-  - `SKILL.md` (instructions injected into context under `[Active Skills]`)
-- `skill.json` supports optional tool overrides:
-  - `enabled_tools`, `disabled_tools`, `allow_tools`, `deny_tools`
-- Skill tool overrides are merged with workspace config and `TOOLS.md` policy.
-- Example installed skill: `skills/web-research`.
+<p align="center">
+  <i>ClawCore � build agents that remember, adapt, and act.</i>
+</p>
