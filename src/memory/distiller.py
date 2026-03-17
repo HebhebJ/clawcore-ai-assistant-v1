@@ -89,7 +89,7 @@ class MemoryDistiller:
                     "content": self._build_distill_input(user_turns, summary, existing),
                 },
             ],
-            "temperature": 0.1,
+            "temperature": self.settings.kimi_temperature,
             "max_tokens": min(1200, self.settings.kimi_max_tokens),
         }
         headers = {

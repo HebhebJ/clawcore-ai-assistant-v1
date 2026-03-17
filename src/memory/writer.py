@@ -94,9 +94,22 @@ class MemoryWriter:
         self.vector_index.append_memory(workspace_id, memory)
         return True
 
-    def _classify(self, msg: str) -> dict | None:
+    def _classify(self, msg: str, allow_memory_command: bool = True) -> dict | None:
         if len(msg) < 3:
             return None
+
+        if allow_memory_command:
+            forced_content = self._extract_forced_memory_content(msg)
+            if forced_content:
+                nested = self._classify(forced_content, allow_memory_command=False)
+                if nested:
+                    return nested
+                return {
+                    "type": "environment_fact",
+                    "content": forced_content,
+                    "tags": ["user", "explicit_memory"],
+                    "importance": 0.85,
+                }
 
         lower = msg.lower()
         if lower.endswith("?"):
@@ -156,6 +169,34 @@ class MemoryWriter:
                     "tags": ["user", "identity"],
                     "importance": 0.9,
                 }
+
+        speak_match = re.match(
+            r"^i\s*(?:can\s+)?speak\s+(.+)$",
+            msg,
+            flags=re.IGNORECASE,
+        )
+        if speak_match:
+            value = speak_match.group(1).strip(" .!")
+            if value:
+                return {
+                    "type": "environment_fact",
+                    "content": f"User languages: {value}",
+                    "tags": ["user", "language"],
+                    "importance": 0.75,
+                }
+
+        bilingual_match = re.match(
+            r"^i\s*(?:am|'m)\s+(?:bi|tri|multi)lingual$",
+            msg,
+            flags=re.IGNORECASE,
+        )
+        if bilingual_match:
+            return {
+                "type": "environment_fact",
+                "content": "User is multilingual",
+                "tags": ["user", "language"],
+                "importance": 0.75,
+            }
 
         preference_match = re.match(
             r"^i\s+(love|like|prefer|enjoy)\s+(.+)$",
@@ -222,6 +263,40 @@ class MemoryWriter:
             }
 
         return None
+
+    def _extract_forced_memory_content(self, msg: str) -> str:
+        value = msg.strip()
+        if not value:
+            return ""
+
+        patterns = [
+            # "save to your memory: <content>"
+            r"^(?:please\s+)?save\s+(?:this\s+)?(?:to\s+)?(?:your\s+)?memory\s*[:\-]?\s*(.+)$",
+            # "note this: <content>", "memorize this: <content>"
+            r"^(?:please\s+)?(?:note|memorize)\s+(?:this\s*)?[:\-]?\s*(.+)$",
+            # "save/memorize/note that <content>"
+            r"^(?:please\s+)?(?:save|memorize|note)\s+that\s+(.+)$",
+            # "can you save to your memory that <content>?"
+            r"^(?:can\s+you|could\s+you|pls|please)\s+(?:save|memorize|note)\s+(?:this\s+)?(?:to\s+)?(?:your\s+)?memory\s*(?:that\s+)?(.+?)[\?\.!]*$",
+        ]
+        for pattern in patterns:
+            match = re.match(pattern, value, flags=re.IGNORECASE)
+            if not match:
+                continue
+            content = match.group(1).strip(" .!?")
+            if content:
+                return content
+
+        # "remember this: <content>" and "remember that <content>"
+        remember_match = re.match(
+            r"^(?:please\s+)?remember\s+(?:this|that)\s*[:\-]?\s*(.+)$",
+            value,
+            flags=re.IGNORECASE,
+        )
+        if remember_match:
+            return remember_match.group(1).strip(" .!?")
+
+        return ""
 
     def _is_duplicate(self, workspace_id: str, candidate: dict) -> bool:
         ctype = str(candidate.get("type", "")).strip()

@@ -122,7 +122,12 @@ class ChatIntegrationTests(unittest.TestCase):
             "KIMI_API_KEY": "test-key",
             "KIMI_MODEL": "kimi-k2",
         }
-        fake_client = FakeHTTPClient([FakeResponse({}, status_code=502)])
+        fake_client = FakeHTTPClient(
+            [
+                FakeResponse({}, status_code=502),
+                FakeResponse({}, status_code=502),
+            ]
+        )
         with patch.dict(os.environ, env, clear=False):
             with patch("src.agents.runtime.create_provider", side_effect=lambda settings: create_provider(settings, client=fake_client)):
                 session_id = f"test-kimi-err-{uuid.uuid4().hex[:8]}"
@@ -155,7 +160,18 @@ class ChatIntegrationTests(unittest.TestCase):
                         ],
                         "usage": {"prompt_tokens": 4, "completion_tokens": 2},
                     }
-                )
+                ),
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "message": {"content": "still-not-json"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+                    }
+                ),
             ]
         )
         with patch.dict(os.environ, env, clear=False):

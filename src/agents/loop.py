@@ -1,11 +1,18 @@
 from src.core.config import MAX_REASONING_ACTIONS, MAX_STEPS, MAX_TOOL_CALLS
 
+_UNSUPPORTED_ACTION_RETRY_HINT = (
+    "Repair instruction: your previous output did not match the required action schema. "
+    "Return only one JSON object with exactly one action: "
+    "tool_call, reasoning, or final_answer."
+)
+
 
 class AgentLoop:
     def run(self, provider, context: str, tools: dict, execute_tool):
         steps = 0
         tool_calls = 0
         reasoning_actions = 0
+        unsupported_action_retried = False
         prompt_tokens_total = 0
         completion_tokens_total = 0
         model_calls = 0
@@ -46,6 +53,10 @@ class AgentLoop:
                 continue
 
             if action != "tool_call":
+                if not unsupported_action_retried:
+                    unsupported_action_retried = True
+                    context += f"\n\n{_UNSUPPORTED_ACTION_RETRY_HINT}"
+                    continue
                 return {
                     "answer": "Stopped safely: model returned unsupported action.",
                     "steps": steps,

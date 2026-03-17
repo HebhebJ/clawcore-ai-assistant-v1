@@ -43,16 +43,46 @@ class KimiProvider(LLMProvider):
         }
 
         start = time.perf_counter()
-        try:
-            response = self.client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-        except httpx.HTTPError as exc:
-            logger.warning("provider=kimi upstream_error request_failed error=%s", exc.__class__.__name__)
-            raise ProviderUpstreamError("Kimi upstream request failed") from exc
-        except ValueError as exc:
-            logger.warning("provider=kimi upstream_error invalid_json")
-            raise ProviderUpstreamError("Kimi upstream returned invalid JSON") from exc
+        retries = 1
+        data = None
+        for attempt in range(retries + 1):
+            try:
+                response = self.client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                break
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response is not None else -1
+                body = ""
+                if exc.response is not None:
+                    body = (exc.response.text or "").replace("\n", " ").strip()[:220]
+                retryable = status in {429, 500, 502, 503, 504}
+                logger.warning(
+                    "provider=kimi upstream_error status=%s retryable=%s attempt=%s body=%s",
+                    status,
+                    retryable,
+                    attempt + 1,
+                    body or "(empty)",
+                )
+                if retryable and attempt < retries:
+                    time.sleep(0.8 * (attempt + 1))
+                    continue
+                raise ProviderUpstreamError("Kimi upstream request failed") from exc
+            except httpx.TimeoutException as exc:
+                logger.warning("provider=kimi upstream_error timeout attempt=%s", attempt + 1)
+                if attempt < retries:
+                    time.sleep(0.8 * (attempt + 1))
+                    continue
+                raise ProviderUpstreamError("Kimi upstream request failed") from exc
+            except httpx.HTTPError as exc:
+                logger.warning("provider=kimi upstream_error request_failed error=%s", exc.__class__.__name__)
+                raise ProviderUpstreamError("Kimi upstream request failed") from exc
+            except ValueError as exc:
+                logger.warning("provider=kimi upstream_error invalid_json")
+                raise ProviderUpstreamError("Kimi upstream returned invalid JSON") from exc
+
+        if data is None:
+            raise ProviderUpstreamError("Kimi upstream request failed")
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 

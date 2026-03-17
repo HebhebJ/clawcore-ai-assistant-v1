@@ -77,6 +77,71 @@ class MemoryDistillTests(unittest.TestCase):
                 self.assertIn("user name: iheb", text)
                 self.assertIn("building ai agentic systems", text)
 
+    def test_kimi_distill_uses_configured_temperature(self):
+        class _Response:
+            def __init__(self) -> None:
+                self.status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {
+                    "choices": [{"message": {"content": '{"memories": []}'}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                }
+
+        captured: dict = {}
+
+        class _Client:
+            def __init__(self, *args, **kwargs):  # noqa: ARG002
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+                return False
+
+            def post(self, url: str, headers: dict, json: dict):
+                captured["url"] = url
+                captured["headers"] = headers
+                captured["json"] = json
+                return _Response()
+
+        settings = LLMSettings(
+            llm_provider="kimi",
+            kimi_api_key="k",
+            kimi_model="m",
+            kimi_base_url="https://api.moonshot.ai/v1",
+            kimi_timeout_seconds=30.0,
+            kimi_temperature=1.0,
+            kimi_max_tokens=800,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "default-agent" / "memory").mkdir(parents=True, exist_ok=True)
+            (base / "default-agent" / "sessions").mkdir(parents=True, exist_ok=True)
+
+            with patch("src.memory.store.WORKSPACES_DIR", base), patch("src.sessions.manager.WORKSPACES_DIR", base):
+                manager = SessionManager()
+                writer = MemoryWriter()
+                distiller = MemoryDistiller(manager, writer, settings=settings)
+
+                manager.load_or_create("default-agent", "s1")
+                manager.append_transcript(
+                    "default-agent",
+                    "s1",
+                    {"role": "user", "content": "my name is iheb", "timestamp": "2026-03-16T00:00:00Z"},
+                )
+
+                with patch("src.memory.distiller.httpx.Client", _Client):
+                    info = distiller.distill_session("default-agent", "s1")
+
+        self.assertEqual(info["mode"], "llm")
+        self.assertEqual(captured["json"]["temperature"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -58,6 +58,18 @@ class AgentLoopReasoningTests(unittest.TestCase):
         self.assertEqual(result["answer"], "recovered")
         self.assertEqual(result["tool_calls"], 1)
 
+    def test_unsupported_action_gets_one_retry(self):
+        loop = AgentLoop()
+        provider = _SeqProvider(
+            [
+                {"action": "unsupported", "_meta": {}},
+                {"action": "final_answer", "final_answer": "fixed_after_retry", "_meta": {}},
+            ]
+        )
+        result = loop.run(provider=provider, context="ctx", tools={}, execute_tool=lambda n, i: "")
+        self.assertEqual(result["answer"], "fixed_after_retry")
+        self.assertEqual(result["tool_calls"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

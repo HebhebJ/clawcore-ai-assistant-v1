@@ -34,6 +34,27 @@ def _print_memory_distill(info: dict | None) -> None:
     )
 
 
+def _print_summary_update(info: dict | None) -> None:
+    if not info:
+        return
+    if info.get("background"):
+        print(
+            "summary> "
+            f"queued=True provider={info.get('provider_configured', 'unknown')} "
+            f"token_cap={int(info.get('token_cap', 0))}"
+        )
+        return
+    fallback = str(info.get("fallback_reason", "")).strip()
+    fallback_part = f" fallback={fallback}" if fallback else ""
+    print(
+        "summary> "
+        f"provider={info.get('provider_used', 'unknown')} "
+        f"compacted={bool(info.get('compacted', False))} "
+        f"tokens={int(info.get('tokens_after', 0))}/{int(info.get('token_cap', 0))}"
+        f"{fallback_part}"
+    )
+
+
 def _run_one_shot(runtime: AgentRuntime, workspace_id: str, session_id: str, message: str) -> int:
     result = runtime.handle_message(workspace_id=workspace_id, session_id=session_id, message=message)
     print(result["answer"])
@@ -47,6 +68,7 @@ def _run_one_shot(runtime: AgentRuntime, workspace_id: str, session_id: str, mes
         f"memory_mode={result.get('memory_retrieval_mode', 'unknown')} "
         f"memory_hits={result.get('retrieved_memories_count', 0)}"
     )
+    _print_summary_update(result.get("summary_update"))
     _print_memory_distill(result.get("memory_distill"))
     return 0
 
@@ -99,6 +121,7 @@ def _run_interactive(runtime: AgentRuntime, workspace_id: str, session_id: str) 
                 f"memory_mode={result.get('memory_retrieval_mode', 'unknown')} "
                 f"memory_hits={result.get('retrieved_memories_count', 0)}"
             )
+            _print_summary_update(result.get("summary_update"))
             _print_memory_distill(result.get("memory_distill"))
         except ValueError as exc:
             print(f"Input error: {exc}")

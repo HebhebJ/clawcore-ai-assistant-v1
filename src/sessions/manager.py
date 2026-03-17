@@ -1,12 +1,22 @@
+import logging
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
 
-from src.core.config import WORKSPACES_DIR
-from src.sessions.summary import update_summary_text
+from src.core.config import WORKSPACES_DIR, load_summary_settings
+from src.sessions.summary import update_summary
 from src.sessions.transcript import append_jsonl, tail_jsonl
+
+logger = logging.getLogger(__name__)
 
 
 class SessionManager:
+    def __init__(self) -> None:
+        self._summary_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="summary-updater")
+        self._summary_locks: dict[tuple[str, str], threading.Lock] = {}
+        self._summary_locks_guard = threading.Lock()
+
     def _session_dir(self, workspace_id: str, session_id: str) -> Path:
         return WORKSPACES_DIR / workspace_id / "sessions" / session_id
 
@@ -62,10 +72,63 @@ class SessionManager:
         path = self._session_dir(workspace_id, session_id) / "tool_calls.jsonl"
         append_jsonl(path, tool_event)
 
-    def update_summary(self, workspace_id: str, session_id: str, assistant_reply: str) -> None:
+    def update_summary(
+        self,
+        workspace_id: str,
+        session_id: str,
+        assistant_reply: str,
+        user_message: str = "",
+    ) -> dict:
         path = self._session_dir(workspace_id, session_id) / "summary.md"
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
-        path.write_text(update_summary_text(existing, assistant_reply), encoding="utf-8")
+        next_summary, info = update_summary(existing, assistant_reply, user_message=user_message)
+        path.write_text(next_summary, encoding="utf-8")
+        return info
+
+    def schedule_summary_update(
+        self,
+        workspace_id: str,
+        session_id: str,
+        assistant_reply: str,
+        user_message: str = "",
+    ) -> dict:
+        settings = load_summary_settings()
+        key = (workspace_id, session_id)
+
+        with self._summary_locks_guard:
+            lock = self._summary_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._summary_locks[key] = lock
+
+        def _worker() -> None:
+            with lock:
+                self.update_summary(
+                    workspace_id=workspace_id,
+                    session_id=session_id,
+                    assistant_reply=assistant_reply,
+                    user_message=user_message,
+                )
+
+        future = self._summary_executor.submit(_worker)
+
+        def _on_done(done) -> None:
+            exc = done.exception()
+            if exc is not None:
+                logger.warning(
+                    "summary background update failed workspace=%s session=%s error=%s",
+                    workspace_id,
+                    session_id,
+                    exc,
+                )
+
+        future.add_done_callback(_on_done)
+        return {
+            "queued": True,
+            "background": True,
+            "provider_configured": settings.summary_updater_provider,
+            "token_cap": settings.summary_token_cap,
+        }
 
     def read_summary(self, workspace_id: str, session_id: str) -> str:
         path = self._session_dir(workspace_id, session_id) / "summary.md"

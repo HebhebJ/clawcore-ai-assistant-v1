@@ -102,7 +102,12 @@ class AgentRuntime:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            self.session_manager.update_summary(workspace_id, session_id, result["answer"])
+            summary_info = self.session_manager.schedule_summary_update(
+                workspace_id,
+                session_id,
+                result["answer"],
+                user_message=message,
+            )
             turn_count = self.session_manager.increment_turn_count(workspace_id, session_id)
             distill_info = None
             if turn_count % self.memory_distill_every_turns == 0:
@@ -111,6 +116,7 @@ class AgentRuntime:
                     result["session_prompt_tokens_total"] = distill_info["session_prompt_tokens_total"]
                     result["session_completion_tokens_total"] = distill_info["session_completion_tokens_total"]
             result["memory_distill"] = distill_info
+            result["summary_update"] = summary_info
             return result
 
         memories = self.memory_retrieval.retrieve(workspace_id, message)
@@ -150,7 +156,12 @@ class AgentRuntime:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            self.session_manager.update_summary(workspace_id, session_id, result["answer"])
+            summary_info = self.session_manager.schedule_summary_update(
+                workspace_id,
+                session_id,
+                result["answer"],
+                user_message=message,
+            )
             turn_count = self.session_manager.increment_turn_count(workspace_id, session_id)
             distill_info = None
             if turn_count % self.memory_distill_every_turns == 0:
@@ -159,6 +170,7 @@ class AgentRuntime:
                     result["session_prompt_tokens_total"] = distill_info["session_prompt_tokens_total"]
                     result["session_completion_tokens_total"] = distill_info["session_completion_tokens_total"]
             result["memory_distill"] = distill_info
+            result["summary_update"] = summary_info
             return result
 
         result = self.loop.run(
@@ -187,7 +199,12 @@ class AgentRuntime:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
-        self.session_manager.update_summary(workspace_id, session_id, result["answer"])
+        summary_info = self.session_manager.schedule_summary_update(
+            workspace_id,
+            session_id,
+            result["answer"],
+            user_message=message,
+        )
         self.memory_writer.maybe_store(workspace_id, message, result["answer"])
         turn_count = self.session_manager.increment_turn_count(workspace_id, session_id)
         distill_info = None
@@ -204,6 +221,7 @@ class AgentRuntime:
             result["session_prompt_tokens_total"] = int(totals.get("input", 0))
             result["session_completion_tokens_total"] = int(totals.get("output", 0))
         result["memory_distill"] = distill_info
+        result["summary_update"] = summary_info
 
         return result
 

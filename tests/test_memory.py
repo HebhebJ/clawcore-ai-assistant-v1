@@ -75,6 +75,51 @@ class MemoryTests(unittest.TestCase):
                 self.assertIn("user is from: tunisia", text)
                 self.assertIn("user lives in: tunisia", text)
 
+    def test_languages_are_stored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "default-agent" / "memory").mkdir(parents=True, exist_ok=True)
+
+            with patch("src.memory.store.WORKSPACES_DIR", base):
+                writer = MemoryWriter()
+                writer.maybe_store("default-agent", "I speak Arabic, French and English", "ok")
+
+                store = MemoryStore()
+                facts = store.load_facts("default-agent")
+                self.assertEqual(len(facts), 1)
+                self.assertEqual(facts[0]["type"], "environment_fact")
+                self.assertIn("languages", str(facts[0]["content"]).lower())
+                self.assertIn("arabic", str(facts[0]["content"]).lower())
+
+    def test_explicit_memory_command_save_to_your_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "default-agent" / "memory").mkdir(parents=True, exist_ok=True)
+
+            with patch("src.memory.store.WORKSPACES_DIR", base):
+                writer = MemoryWriter()
+                writer.maybe_store("default-agent", "save to your memory: i speak arabic and french", "ok")
+
+                store = MemoryStore()
+                facts = store.load_facts("default-agent")
+                self.assertEqual(len(facts), 1)
+                self.assertIn("languages", str(facts[0]["content"]).lower())
+                self.assertIn("arabic", str(facts[0]["content"]).lower())
+
+    def test_explicit_memory_command_memorize_that(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "default-agent" / "memory").mkdir(parents=True, exist_ok=True)
+
+            with patch("src.memory.store.WORKSPACES_DIR", base):
+                writer = MemoryWriter()
+                writer.maybe_store("default-agent", "memorize that my timezone is Africa/Tunis", "ok")
+
+                store = MemoryStore()
+                facts = store.load_facts("default-agent")
+                self.assertEqual(len(facts), 1)
+                self.assertIn("timezone", str(facts[0]["content"]).lower())
+
 
 if __name__ == "__main__":
     unittest.main()

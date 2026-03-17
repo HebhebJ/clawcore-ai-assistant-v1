@@ -9,3 +9,4 @@ __pycache__/
 # Runtime workspace data (can include private conversation/memory traces)
 workspaces/*/sessions/
 workspaces/*/memory/
+workspaces/*/channels/

@@ -33,6 +33,7 @@ class ChatResponse(BaseModel):
     context_tokens_estimate: int = 0
     retrieved_memories_count: int = 0
     memory_retrieval_mode: str = "hybrid"
+    summary_update: dict = Field(default_factory=dict)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -57,6 +58,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             context_tokens_estimate=result.get("context_tokens_estimate", 0),
             retrieved_memories_count=result.get("retrieved_memories_count", 0),
             memory_retrieval_mode=result.get("memory_retrieval_mode", "hybrid"),
+            summary_update=result.get("summary_update", {}),
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
