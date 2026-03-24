@@ -2,9 +2,8 @@ import json
 import logging
 import re
 
-import httpx
-
 from src.core.config import LLMSettings
+from src.llm.base import LLMProvider
 from src.sessions.manager import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -23,13 +22,21 @@ Rules:
 
 
 class MemoryDistiller:
-    def __init__(self, session_manager: SessionManager, memory_writer, settings: LLMSettings, llm_extract_fn=None) -> None:
+    def __init__(
+        self,
+        session_manager: SessionManager,
+        memory_writer,
+        settings: LLMSettings,
+        llm_extract_fn=None,
+        provider: LLMProvider | None = None,
+    ) -> None:
         self.session_manager = session_manager
         self.memory_writer = memory_writer
         self.settings = settings
         self.llm_extract_fn = llm_extract_fn
+        self.provider = provider
 
-    def distill_session(self, workspace_id: str, session_id: str, limit: int = 40) -> dict:
+    async def distill_session(self, workspace_id: str, session_id: str, limit: int = 40) -> dict:
         events = self.session_manager.load_recent_transcript(workspace_id, session_id, limit=limit)
         summary = self.session_manager.read_summary(workspace_id, session_id)
         existing = self.memory_writer.store.load_all(workspace_id)
@@ -40,7 +47,7 @@ class MemoryDistiller:
             return {"ran": False, "saved": 0, "prompt_tokens": 0, "completion_tokens": 0, "mode": "none"}
 
         try:
-            memories, prompt_tokens, completion_tokens = self._extract_with_llm(user_turns, summary, existing)
+            memories, prompt_tokens, completion_tokens = await self._extract_with_llm(user_turns, summary, existing)
             saved = self.memory_writer.maybe_store_candidates(
                 workspace_id=workspace_id,
                 candidates=memories,
@@ -73,41 +80,16 @@ class MemoryDistiller:
                 "mode": "fallback",
             }
 
-    def _extract_with_llm(self, user_turns: list[str], summary: str, existing: list[dict]) -> tuple[list[dict], int, int]:
+    async def _extract_with_llm(self, user_turns: list[str], summary: str, existing: list[dict]) -> tuple[list[dict], int, int]:
         if self.llm_extract_fn is not None:
             return self.llm_extract_fn(user_turns, summary, existing)
 
-        if self.settings.llm_provider != "kimi" or not self.settings.kimi_api_key or not self.settings.kimi_model:
-            raise RuntimeError("LLM memory distill unavailable for current provider configuration")
+        if self.provider is None:
+            raise RuntimeError("No LLM provider configured for memory distillation")
 
-        payload = {
-            "model": self.settings.kimi_model,
-            "messages": [
-                {"role": "system", "content": MEMORY_DISTILL_SYSTEM},
-                {
-                    "role": "user",
-                    "content": self._build_distill_input(user_turns, summary, existing),
-                },
-            ],
-            "temperature": self.settings.kimi_temperature,
-            "max_tokens": min(1200, self.settings.kimi_max_tokens),
-        }
-        headers = {
-            "Authorization": f"Bearer {self.settings.kimi_api_key}",
-            "Content-Type": "application/json",
-        }
-        url = f"{self.settings.kimi_base_url.rstrip('/')}/chat/completions"
-
-        with httpx.Client(timeout=self.settings.kimi_timeout_seconds) as client:
-            response = client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-
-        content = str(data["choices"][0]["message"]["content"])
+        user_content = self._build_distill_input(user_turns, summary, existing)
+        content, prompt_tokens, completion_tokens = await self.provider.complete(MEMORY_DISTILL_SYSTEM, user_content)
         parsed = self._parse_memories_json(content)
-        usage = data.get("usage", {})
-        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
-        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
         return parsed, prompt_tokens, completion_tokens
 
     def _build_distill_input(self, user_turns: list[str], summary: str, existing: list[dict]) -> str:

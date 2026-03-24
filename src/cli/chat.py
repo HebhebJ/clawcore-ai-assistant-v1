@@ -1,8 +1,11 @@
 import argparse
+import asyncio
 from datetime import datetime, timezone
 
 from src.agents.runtime import AgentRuntime
+from src.core.config import load_session_max_age_days
 from src.core.errors import ProviderUpstreamError, RuntimeConfigError
+from src.sessions.pruner import prune_sessions
 
 
 def _default_session_id() -> str:
@@ -17,9 +20,10 @@ def _print_banner(workspace_id: str, session_id: str) -> None:
 
 
 def _print_help() -> None:
-    print("/help  Show available commands")
-    print("/new   Start a new session id")
-    print("/exit  Quit the CLI")
+    print("/help   Show available commands")
+    print("/new    Start a new session id")
+    print("/prune  Delete sessions older than SESSION_MAX_AGE_DAYS")
+    print("/exit   Quit the CLI")
 
 
 def _print_memory_distill(info: dict | None) -> None:
@@ -55,8 +59,8 @@ def _print_summary_update(info: dict | None) -> None:
     )
 
 
-def _run_one_shot(runtime: AgentRuntime, workspace_id: str, session_id: str, message: str) -> int:
-    result = runtime.handle_message(workspace_id=workspace_id, session_id=session_id, message=message)
+async def _run_one_shot(runtime: AgentRuntime, workspace_id: str, session_id: str, message: str) -> int:
+    result = await runtime.handle_message(workspace_id=workspace_id, session_id=session_id, message=message)
     print(result["answer"])
     print(
         "meta> "
@@ -73,7 +77,7 @@ def _run_one_shot(runtime: AgentRuntime, workspace_id: str, session_id: str, mes
     return 0
 
 
-def _run_interactive(runtime: AgentRuntime, workspace_id: str, session_id: str) -> int:
+async def _run_interactive(runtime: AgentRuntime, workspace_id: str, session_id: str) -> int:
     _print_banner(workspace_id, session_id)
 
     active_session_id = session_id
@@ -81,31 +85,36 @@ def _run_interactive(runtime: AgentRuntime, workspace_id: str, session_id: str) 
         try:
             raw = input("you> ").strip()
         except EOFError:
-            _print_memory_distill(runtime.flush_memory(workspace_id=workspace_id, session_id=active_session_id))
+            _print_memory_distill(await runtime.flush_memory(workspace_id=workspace_id, session_id=active_session_id))
             print("\nExiting.")
             return 0
         except KeyboardInterrupt:
-            _print_memory_distill(runtime.flush_memory(workspace_id=workspace_id, session_id=active_session_id))
+            _print_memory_distill(await runtime.flush_memory(workspace_id=workspace_id, session_id=active_session_id))
             print("\nExiting.")
             return 0
 
         if not raw:
             continue
         if raw == "/exit":
-            _print_memory_distill(runtime.flush_memory(workspace_id=workspace_id, session_id=active_session_id))
+            _print_memory_distill(await runtime.flush_memory(workspace_id=workspace_id, session_id=active_session_id))
             print("Exiting.")
             return 0
         if raw == "/help":
             _print_help()
             continue
+        if raw == "/prune":
+            max_age = load_session_max_age_days()
+            info = prune_sessions(workspace_id, max_age)
+            print(f"prune> pruned={info['pruned']} kept={info['kept']} older_than={max_age}d workspace={workspace_id}")
+            continue
         if raw == "/new":
-            _print_memory_distill(runtime.flush_memory(workspace_id=workspace_id, session_id=active_session_id))
+            _print_memory_distill(await runtime.flush_memory(workspace_id=workspace_id, session_id=active_session_id))
             active_session_id = _default_session_id()
             print(f"Started new session: {active_session_id}")
             continue
 
         try:
-            result = runtime.handle_message(
+            result = await runtime.handle_message(
                 workspace_id=workspace_id,
                 session_id=active_session_id,
                 message=raw,
@@ -129,7 +138,7 @@ def _run_interactive(runtime: AgentRuntime, workspace_id: str, session_id: str) 
             print(f"Runtime error: {exc}")
 
 
-def main() -> int:
+async def _main() -> int:
     parser = argparse.ArgumentParser(description="ClawCore interactive CLI")
     parser.add_argument("--workspace-id", default="default-agent", help="Workspace id")
     parser.add_argument("--session-id", default=None, help="Session id (default: auto-generated)")
@@ -141,8 +150,8 @@ def main() -> int:
     try:
         runtime = AgentRuntime()
         if args.message:
-            return _run_one_shot(runtime, args.workspace_id, session_id, args.message)
-        return _run_interactive(runtime, args.workspace_id, session_id)
+            return await _run_one_shot(runtime, args.workspace_id, session_id, args.message)
+        return await _run_interactive(runtime, args.workspace_id, session_id)
     except RuntimeConfigError as exc:
         print(f"Config error: {exc}")
         return 2
@@ -155,6 +164,10 @@ def main() -> int:
     except ValueError as exc:
         print(f"Input error: {exc}")
         return 5
+
+
+def main() -> int:
+    return asyncio.run(_main())
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ class FakeHTTPClient:
     def __init__(self, responses):
         self._responses = list(responses)
 
-    def post(self, url, headers, json):
+    async def post(self, url, headers, json):
         if not self._responses:
             raise AssertionError("No more fake responses available")
         return self._responses.pop(0)
@@ -65,8 +65,8 @@ class ChatIntegrationTests(unittest.TestCase):
         self._clear_runtime_cache()
         env = {
             "LLM_PROVIDER": "kimi",
-            "KIMI_API_KEY": "test-key",
-            "KIMI_MODEL": "kimi-k2",
+            "LLM_API_KEY": "test-key",
+            "LLM_MODEL": "kimi-k2",
         }
         fake_client = FakeHTTPClient(
             [
@@ -119,8 +119,8 @@ class ChatIntegrationTests(unittest.TestCase):
         self._clear_runtime_cache()
         env = {
             "LLM_PROVIDER": "kimi",
-            "KIMI_API_KEY": "test-key",
-            "KIMI_MODEL": "kimi-k2",
+            "LLM_API_KEY": "test-key",
+            "LLM_MODEL": "kimi-k2",
         }
         fake_client = FakeHTTPClient(
             [
@@ -145,8 +145,8 @@ class ChatIntegrationTests(unittest.TestCase):
         self._clear_runtime_cache()
         env = {
             "LLM_PROVIDER": "kimi",
-            "KIMI_API_KEY": "test-key",
-            "KIMI_MODEL": "kimi-k2",
+            "LLM_API_KEY": "test-key",
+            "LLM_MODEL": "kimi-k2",
         }
         fake_client = FakeHTTPClient(
             [

@@ -73,18 +73,18 @@ def _split_message(text: str, max_len: int = 3500) -> list[str]:
     return chunks
 
 
-def _send_telegram_messages(settings: TelegramSettings, chat_id: int, text: str) -> None:
+async def _send_telegram_messages(settings: TelegramSettings, chat_id: int, text: str) -> None:
     chunks = _split_message(text)
     if not chunks:
         return
     url = f"https://api.telegram.org/bot{settings.bot_token}/sendMessage"
-    with httpx.Client(timeout=settings.timeout_seconds) as client:
+    async with httpx.AsyncClient(timeout=settings.timeout_seconds) as client:
         for chunk in chunks:
-            response = client.post(url, json={"chat_id": chat_id, "text": chunk})
+            response = await client.post(url, json={"chat_id": chat_id, "text": chunk})
             response.raise_for_status()
 
 
-def _process_update(update: dict, settings: TelegramSettings) -> None:
+async def _process_update(update: dict, settings: TelegramSettings) -> None:
     chat_id, text = _extract_message(update)
     if chat_id is None or not text:
         return
@@ -94,25 +94,25 @@ def _process_update(update: dict, settings: TelegramSettings) -> None:
         command = _extract_command(text)
         if command == "/new":
             current_session = _SESSION_STORE.get_or_create_current(settings.workspace_id, chat_id)
-            flush = runtime.flush_memory(settings.workspace_id, current_session)
+            flush = await runtime.flush_memory(settings.workspace_id, current_session)
             new_session = _SESSION_STORE.start_new(settings.workspace_id, chat_id)
             reply = (
                 f"Started new session: {new_session}\n"
                 f"Flushed memory: saved={int(flush.get('saved', 0))} mode={flush.get('mode', 'unknown')}"
             )
-            _send_telegram_messages(settings=settings, chat_id=chat_id, text=reply)
+            await _send_telegram_messages(settings=settings, chat_id=chat_id, text=reply)
             return
 
         if command == "/exit":
             current_session = _SESSION_STORE.get_or_create_current(settings.workspace_id, chat_id)
-            flush = runtime.flush_memory(settings.workspace_id, current_session)
+            flush = await runtime.flush_memory(settings.workspace_id, current_session)
             _SESSION_STORE.close_current(settings.workspace_id, chat_id)
             reply = (
                 "Session closed.\n"
                 f"Flushed memory: saved={int(flush.get('saved', 0))} mode={flush.get('mode', 'unknown')}\n"
                 "Send any message (or /new) to start a fresh session."
             )
-            _send_telegram_messages(settings=settings, chat_id=chat_id, text=reply)
+            await _send_telegram_messages(settings=settings, chat_id=chat_id, text=reply)
             return
 
         if command == "/session":
@@ -129,7 +129,7 @@ def _process_update(update: dict, settings: TelegramSettings) -> None:
             return
 
         session_id = _SESSION_STORE.get_or_create_current(settings.workspace_id, chat_id)
-        result = runtime.handle_message(
+        result = await runtime.handle_message(
             workspace_id=settings.workspace_id,
             session_id=session_id,
             message=text,
@@ -137,7 +137,7 @@ def _process_update(update: dict, settings: TelegramSettings) -> None:
         answer = str(result.get("answer", "")).strip()
         if not answer:
             return
-        _send_telegram_messages(settings=settings, chat_id=chat_id, text=answer)
+        await _send_telegram_messages(settings=settings, chat_id=chat_id, text=answer)
     except Exception as exc:  # noqa: BLE001
         logger.warning("telegram update processing failed chat_id=%s error=%s", chat_id, exc)
 

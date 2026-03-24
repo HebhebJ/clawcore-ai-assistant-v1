@@ -37,10 +37,10 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
+async def chat(req: ChatRequest) -> ChatResponse:
     try:
         runtime = get_runtime()
-        result = runtime.handle_message(
+        result = await runtime.handle_message(
             workspace_id=req.workspace_id,
             session_id=req.session_id,
             message=req.message,

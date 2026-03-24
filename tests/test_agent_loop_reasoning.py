@@ -7,14 +7,17 @@ class _SeqProvider:
     def __init__(self, decisions):
         self._decisions = list(decisions)
 
-    def generate(self, context: str, tools: dict) -> dict:
+    async def generate(self, messages: list[dict], tools: dict) -> dict:
         if not self._decisions:
             return {"action": "final_answer", "final_answer": "fallback", "_meta": {}}
         return self._decisions.pop(0)
 
 
-class AgentLoopReasoningTests(unittest.TestCase):
-    def test_reasoning_then_final_answer(self):
+class AgentLoopReasoningTests(unittest.IsolatedAsyncioTestCase):
+    def _msgs(self) -> list[dict]:
+        return [{"role": "user", "content": "ctx"}]
+
+    async def test_reasoning_then_final_answer(self):
         loop = AgentLoop()
         provider = _SeqProvider(
             [
@@ -22,11 +25,11 @@ class AgentLoopReasoningTests(unittest.TestCase):
                 {"action": "final_answer", "final_answer": "done", "_meta": {}},
             ]
         )
-        result = loop.run(provider=provider, context="ctx", tools={}, execute_tool=lambda n, i: "")
+        result = await loop.run(provider=provider, messages=self._msgs(), tools={}, execute_tool=lambda n, i: "")
         self.assertEqual(result["answer"], "done")
         self.assertEqual(result["tool_calls"], 0)
 
-    def test_reasoning_cap_stops_safely(self):
+    async def test_reasoning_cap_stops_safely(self):
         loop = AgentLoop()
         provider = _SeqProvider(
             [
@@ -38,11 +41,11 @@ class AgentLoopReasoningTests(unittest.TestCase):
                 {"action": "reasoning", "reasoning": "r6", "_meta": {}},
             ]
         )
-        result = loop.run(provider=provider, context="ctx", tools={}, execute_tool=lambda n, i: "")
+        result = await loop.run(provider=provider, messages=self._msgs(), tools={}, execute_tool=lambda n, i: "")
         self.assertIn("max reasoning actions", result["answer"].lower())
         self.assertEqual(result["tool_calls"], 0)
 
-    def test_tool_error_does_not_crash_loop(self):
+    async def test_tool_error_does_not_crash_loop(self):
         loop = AgentLoop()
         provider = _SeqProvider(
             [
@@ -54,11 +57,11 @@ class AgentLoopReasoningTests(unittest.TestCase):
         def _fail_tool(_name, _input):
             raise ValueError("File not found")
 
-        result = loop.run(provider=provider, context="ctx", tools={}, execute_tool=_fail_tool)
+        result = await loop.run(provider=provider, messages=self._msgs(), tools={}, execute_tool=_fail_tool)
         self.assertEqual(result["answer"], "recovered")
         self.assertEqual(result["tool_calls"], 1)
 
-    def test_unsupported_action_gets_one_retry(self):
+    async def test_unsupported_action_gets_one_retry(self):
         loop = AgentLoop()
         provider = _SeqProvider(
             [
@@ -66,7 +69,7 @@ class AgentLoopReasoningTests(unittest.TestCase):
                 {"action": "final_answer", "final_answer": "fixed_after_retry", "_meta": {}},
             ]
         )
-        result = loop.run(provider=provider, context="ctx", tools={}, execute_tool=lambda n, i: "")
+        result = await loop.run(provider=provider, messages=self._msgs(), tools={}, execute_tool=lambda n, i: "")
         self.assertEqual(result["answer"], "fixed_after_retry")
         self.assertEqual(result["tool_calls"], 0)
 

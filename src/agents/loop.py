@@ -1,4 +1,4 @@
-from src.core.config import MAX_REASONING_ACTIONS, MAX_STEPS, MAX_TOOL_CALLS
+from src.core.config import load_agent_limits
 
 _UNSUPPORTED_ACTION_RETRY_HINT = (
     "Repair instruction: your previous output did not match the required action schema. "
@@ -8,7 +8,8 @@ _UNSUPPORTED_ACTION_RETRY_HINT = (
 
 
 class AgentLoop:
-    def run(self, provider, context: str, tools: dict, execute_tool):
+    async def run(self, provider, messages: list[dict], tools: dict, execute_tool):
+        limits = load_agent_limits()
         steps = 0
         tool_calls = 0
         reasoning_actions = 0
@@ -17,13 +18,14 @@ class AgentLoop:
         completion_tokens_total = 0
         model_calls = 0
 
-        while steps < MAX_STEPS:
+        while steps < limits.max_steps:
             steps += 1
-            decision = provider.generate(context=context, tools=tools)
+            decision = await provider.generate(messages=messages, tools=tools)
             model_calls += 1
             meta = decision.get("_meta", {})
             prompt_tokens_total += int(meta.get("prompt_tokens", 0) or 0)
             completion_tokens_total += int(meta.get("completion_tokens", 0) or 0)
+            raw_content = str(meta.get("raw_content", ""))
             action = decision.get("action")
 
             if action == "final_answer":
@@ -37,7 +39,7 @@ class AgentLoop:
                 }
 
             if action == "reasoning":
-                if reasoning_actions >= MAX_REASONING_ACTIONS:
+                if reasoning_actions >= limits.max_reasoning_actions:
                     return {
                         "answer": "Stopped safely: max reasoning actions reached.",
                         "steps": steps,
@@ -47,15 +49,13 @@ class AgentLoop:
                         "model_calls": model_calls,
                     }
                 reasoning_actions += 1
-                note = str(decision.get("reasoning", "")).strip()
-                if note:
-                    context += f"\n\nReasoning note:\n{note[:300]}"
+                messages.append({"role": "assistant", "content": raw_content})
                 continue
 
             if action != "tool_call":
                 if not unsupported_action_retried:
                     unsupported_action_retried = True
-                    context += f"\n\n{_UNSUPPORTED_ACTION_RETRY_HINT}"
+                    messages.append({"role": "user", "content": _UNSUPPORTED_ACTION_RETRY_HINT})
                     continue
                 return {
                     "answer": "Stopped safely: model returned unsupported action.",
@@ -66,7 +66,7 @@ class AgentLoop:
                     "model_calls": model_calls,
                 }
 
-            if tool_calls >= MAX_TOOL_CALLS:
+            if tool_calls >= limits.max_tool_calls:
                 return {
                     "answer": "Stopped safely: max tool calls reached.",
                     "steps": steps,
@@ -85,7 +85,8 @@ class AgentLoop:
             except RuntimeError as exc:
                 observation = f"Tool runtime error: {exc}"
             tool_calls += 1
-            context += f"\n\nTool observation ({tool_name}):\n{observation}"
+            messages.append({"role": "assistant", "content": raw_content})
+            messages.append({"role": "user", "content": f"Tool result ({tool_name}):\n{observation}"})
 
         return {
             "answer": "Stopped safely: max reasoning steps reached.",

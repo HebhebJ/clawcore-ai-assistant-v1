@@ -7,34 +7,40 @@ from src.core.errors import RuntimeConfigError
 BASE_DIR = Path(__file__).resolve().parents[2]
 WORKSPACES_DIR = BASE_DIR / "workspaces"
 DEFAULT_WORKSPACE_ID = "default-agent"
-MAX_STEPS = 10
-MAX_TOOL_CALLS = 5
-MAX_REASONING_ACTIONS = 5
+
+
+@dataclass(frozen=True)
+class AgentLimits:
+    max_steps: int = 10
+    max_tool_calls: int = 5
+    max_reasoning_actions: int = 5
 
 
 @dataclass(frozen=True)
 class LLMSettings:
-    llm_provider: str = "kimi"
-    kimi_api_key: str = ""
-    kimi_model: str = ""
-    kimi_base_url: str = "https://api.moonshot.ai/v1"
-    kimi_timeout_seconds: float = 30.0
-    kimi_temperature: float = 0.2
-    kimi_max_tokens: int = 800
+    llm_provider: str = "mock"
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_base_url: str = ""
+    llm_timeout_seconds: float = 30.0
+    llm_temperature: float = 0.2
+    llm_max_tokens: int = 800
+    llm_max_retries: int = 1
 
 
 @dataclass(frozen=True)
 class SummarySettings:
-    summary_updater_provider: str = "ollama"
+    summary_updater_provider: str = "heuristic"
     summary_token_cap: int = 1000
     summary_delta_max_lines: int = 3
     summary_compact_target_tokens: int = 350
     summary_timeout_seconds: float = 30.0
     summary_temperature: float = 0.1
-    summary_ollama_max_failures: int = 3
-    summary_ollama_cooldown_seconds: float = 60.0
-    ollama_base_url: str = "http://127.0.0.1:11434"
-    ollama_summary_model: str = "gpt-oss:20b"
+    summary_max_failures: int = 3
+    summary_cooldown_seconds: float = 60.0
+    summary_api_key: str = ""
+    summary_model: str = ""
+    summary_base_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -105,24 +111,43 @@ def _get_env_bool(name: str, default: bool) -> bool:
     raise RuntimeConfigError(f"{name} must be a boolean (true/false)")
 
 
+def load_agent_limits() -> AgentLimits:
+    _load_dotenv_file()
+    max_steps = _get_env_int("MAX_STEPS", 10)
+    max_tool_calls = _get_env_int("MAX_TOOL_CALLS", 5)
+    max_reasoning_actions = _get_env_int("MAX_REASONING_ACTIONS", 5)
+    if max_steps < 1:
+        raise RuntimeConfigError("MAX_STEPS must be >= 1")
+    if max_tool_calls < 1:
+        raise RuntimeConfigError("MAX_TOOL_CALLS must be >= 1")
+    if max_reasoning_actions < 1:
+        raise RuntimeConfigError("MAX_REASONING_ACTIONS must be >= 1")
+    return AgentLimits(
+        max_steps=max_steps,
+        max_tool_calls=max_tool_calls,
+        max_reasoning_actions=max_reasoning_actions,
+    )
+
+
 def load_llm_settings() -> LLMSettings:
     _load_dotenv_file()
 
     settings = LLMSettings(
-        llm_provider=os.getenv("LLM_PROVIDER", "kimi").strip().lower(),
-        kimi_api_key=os.getenv("KIMI_API_KEY", "").strip(),
-        kimi_model=os.getenv("KIMI_MODEL", "").strip(),
-        kimi_base_url=os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai/v1").strip(),
-        kimi_timeout_seconds=_get_env_float("KIMI_TIMEOUT_SECONDS", 30.0),
-        kimi_temperature=_get_env_float("KIMI_TEMPERATURE", 0.2),
-        kimi_max_tokens=_get_env_int("KIMI_MAX_TOKENS", 800),
+        llm_provider=os.getenv("LLM_PROVIDER", "mock").strip().lower(),
+        llm_api_key=os.getenv("LLM_API_KEY", "").strip(),
+        llm_model=os.getenv("LLM_MODEL", "").strip(),
+        llm_base_url=os.getenv("LLM_BASE_URL", "").strip(),
+        llm_timeout_seconds=_get_env_float("LLM_TIMEOUT_SECONDS", 30.0),
+        llm_temperature=_get_env_float("LLM_TEMPERATURE", 0.2),
+        llm_max_tokens=_get_env_int("LLM_MAX_TOKENS", 800),
+        llm_max_retries=_get_env_int("LLM_MAX_RETRIES", 1),
     )
 
-    if settings.llm_provider == "kimi":
-        if not settings.kimi_api_key:
-            raise RuntimeConfigError("Missing required env var: KIMI_API_KEY")
-        if not settings.kimi_model:
-            raise RuntimeConfigError("Missing required env var: KIMI_MODEL")
+    if settings.llm_provider != "mock":
+        if not settings.llm_api_key:
+            raise RuntimeConfigError("Missing required env var: LLM_API_KEY")
+        if not settings.llm_model:
+            raise RuntimeConfigError("Missing required env var: LLM_MODEL")
 
     return settings
 
@@ -135,6 +160,22 @@ def load_memory_distill_every_turns() -> int:
     return value
 
 
+def load_session_max_age_days() -> int:
+    _load_dotenv_file()
+    value = _get_env_int("SESSION_MAX_AGE_DAYS", 30)
+    if value < 1:
+        raise RuntimeConfigError("SESSION_MAX_AGE_DAYS must be >= 1")
+    return value
+
+
+def load_summary_every_turns() -> int:
+    _load_dotenv_file()
+    value = _get_env_int("SUMMARY_EVERY_TURNS", 3)
+    if value < 1:
+        raise RuntimeConfigError("SUMMARY_EVERY_TURNS must be >= 1")
+    return value
+
+
 def load_memory_retrieval_mode() -> str:
     _load_dotenv_file()
     mode = os.getenv("MEMORY_RETRIEVAL_MODE", "hybrid").strip().lower()
@@ -143,11 +184,23 @@ def load_memory_retrieval_mode() -> str:
     return mode
 
 
+_SUMMARY_DEFAULT_BASE_URLS: dict[str, str] = {
+    "ollama": "http://127.0.0.1:11434",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "openai": "https://api.openai.com/v1",
+    "kimi": "https://api.moonshot.ai/v1",
+}
+_SUMMARY_DEFAULT_MODELS: dict[str, str] = {
+    "ollama": "gpt-oss:20b",
+}
+
+
 def load_summary_settings() -> SummarySettings:
     _load_dotenv_file()
-    provider = os.getenv("SUMMARY_UPDATER_PROVIDER", "ollama").strip().lower()
-    if provider not in {"ollama", "heuristic"}:
-        raise RuntimeConfigError("SUMMARY_UPDATER_PROVIDER must be one of: ollama, heuristic")
+    provider = os.getenv("SUMMARY_UPDATER_PROVIDER", "heuristic").strip().lower()
+    valid_providers = {"ollama", "openrouter", "openai", "kimi", "heuristic"}
+    if provider not in valid_providers:
+        raise RuntimeConfigError(f"SUMMARY_UPDATER_PROVIDER must be one of: {', '.join(sorted(valid_providers))}")
 
     token_cap = _get_env_int("SUMMARY_TOKEN_CAP", 1000)
     if token_cap < 200:
@@ -169,13 +222,16 @@ def load_summary_settings() -> SummarySettings:
     if temperature < 0 or temperature > 2:
         raise RuntimeConfigError("SUMMARY_TEMPERATURE must be between 0 and 2")
 
-    max_failures = _get_env_int("SUMMARY_OLLAMA_MAX_FAILURES", 3)
+    max_failures = _get_env_int("SUMMARY_MAX_FAILURES", 3)
     if max_failures < 1:
-        raise RuntimeConfigError("SUMMARY_OLLAMA_MAX_FAILURES must be >= 1")
+        raise RuntimeConfigError("SUMMARY_MAX_FAILURES must be >= 1")
 
-    cooldown_seconds = _get_env_float("SUMMARY_OLLAMA_COOLDOWN_SECONDS", 60.0)
+    cooldown_seconds = _get_env_float("SUMMARY_COOLDOWN_SECONDS", 60.0)
     if cooldown_seconds < 0:
-        raise RuntimeConfigError("SUMMARY_OLLAMA_COOLDOWN_SECONDS must be >= 0")
+        raise RuntimeConfigError("SUMMARY_COOLDOWN_SECONDS must be >= 0")
+
+    base_url = os.getenv("SUMMARY_BASE_URL", "").strip() or _SUMMARY_DEFAULT_BASE_URLS.get(provider, "")
+    model = os.getenv("SUMMARY_MODEL", "").strip() or _SUMMARY_DEFAULT_MODELS.get(provider, "")
 
     return SummarySettings(
         summary_updater_provider=provider,
@@ -184,10 +240,11 @@ def load_summary_settings() -> SummarySettings:
         summary_compact_target_tokens=compact_target,
         summary_timeout_seconds=timeout_seconds,
         summary_temperature=temperature,
-        summary_ollama_max_failures=max_failures,
-        summary_ollama_cooldown_seconds=cooldown_seconds,
-        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip(),
-        ollama_summary_model=os.getenv("OLLAMA_SUMMARY_MODEL", "gpt-oss:20b").strip(),
+        summary_max_failures=max_failures,
+        summary_cooldown_seconds=cooldown_seconds,
+        summary_api_key=os.getenv("SUMMARY_API_KEY", "").strip(),
+        summary_model=model,
+        summary_base_url=base_url,
     )
 
 

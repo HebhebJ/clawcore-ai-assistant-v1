@@ -1,4 +1,4 @@
-from src.context.prompt_layers import BASE_SYSTEM_PROMPT
+from src.context.prompt_layers import ACTION_INSTRUCTIONS, BASE_SYSTEM_PROMPT
 from src.context.tool_prompt import render_tools
 
 
@@ -11,12 +11,12 @@ class ContextBuilder:
         tools: dict,
         user_message: str,
         skill_instructions: str = "",
-    ) -> str:
-        recent = "\n".join([f"{e['role']}: {e['content']}" for e in session.get("recent", [])])
+    ) -> list[dict]:
         memory_text = "\n".join(memories)
 
-        parts = [
+        system_parts = [
             BASE_SYSTEM_PROMPT,
+            ACTION_INSTRUCTIONS,
             "[AGENT.md]\n" + workspace.get("AGENT.md", ""),
             "[SOUL.md]\n" + workspace.get("SOUL.md", ""),
             "[TOOLS.md]\n" + workspace.get("TOOLS.md", ""),
@@ -25,8 +25,15 @@ class ContextBuilder:
             "[Active Skills]\n" + skill_instructions,
             "[Retrieved Memories]\n" + memory_text,
             "[Session Summary]\n" + session.get("summary", ""),
-            "[Recent Conversation]\n" + recent,
             "[Tool Descriptions]\n" + render_tools(tools),
-            "[Current User Message]\n" + user_message,
         ]
-        return "\n\n".join(parts)
+        messages: list[dict] = [{"role": "system", "content": "\n\n".join(system_parts)}]
+
+        for event in session.get("recent", []):
+            role = str(event.get("role", "")).strip()
+            content = str(event.get("content", "")).strip()
+            if role in {"user", "assistant"} and content:
+                messages.append({"role": role, "content": content})
+
+        messages.append({"role": "user", "content": user_message})
+        return messages

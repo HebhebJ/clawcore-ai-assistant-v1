@@ -4,7 +4,7 @@ import logging
 from src.agents.loop import AgentLoop
 from src.agents.workspace_loader import WorkspaceLoader
 from src.context.builder import ContextBuilder
-from src.core.config import LLMSettings, load_llm_settings, load_memory_distill_every_turns
+from src.core.config import LLMSettings, load_llm_settings, load_memory_distill_every_turns, load_summary_every_turns
 from src.llm.factory import create_provider
 from src.llm.token_counter import estimate_tokens
 from src.memory.distiller import MemoryDistiller
@@ -35,14 +35,15 @@ class AgentRuntime:
         self.memory_writer = MemoryWriter()
         self.context_builder = ContextBuilder()
         self.settings = settings or load_llm_settings()
-        self.memory_distiller = MemoryDistiller(self.session_manager, self.memory_writer, self.settings)
-        self.memory_distill_every_turns = load_memory_distill_every_turns()
         self.provider = provider or create_provider(self.settings)
+        self.memory_distiller = MemoryDistiller(self.session_manager, self.memory_writer, self.settings, provider=self.provider)
+        self.memory_distill_every_turns = load_memory_distill_every_turns()
+        self.summary_every_turns = load_summary_every_turns()
         self.tools = default_registry()
         self.tool_executor = ToolExecutor(self.tools)
         self.loop = AgentLoop()
 
-    def handle_message(self, workspace_id: str, session_id: str, message: str) -> dict:
+    async def handle_message(self, workspace_id: str, session_id: str, message: str) -> dict:
         workspace = self.workspace_loader.load(workspace_id)
         session = self.session_manager.load_or_create(workspace_id, session_id)
         session_totals = session.get("state", {}).get("token_totals", {"input": 0, "output": 0})
@@ -93,35 +94,12 @@ class AgentRuntime:
                 "session_prompt_tokens_total": int(session_totals.get("input", 0)),
                 "session_completion_tokens_total": int(session_totals.get("output", 0)),
             }
-            self.session_manager.append_transcript(
-                workspace_id,
-                session_id,
-                {
-                    "role": "assistant",
-                    "content": result["answer"],
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                },
-            )
-            summary_info = self.session_manager.schedule_summary_update(
-                workspace_id,
-                session_id,
-                result["answer"],
-                user_message=message,
-            )
-            turn_count = self.session_manager.increment_turn_count(workspace_id, session_id)
-            distill_info = None
-            if turn_count % self.memory_distill_every_turns == 0:
-                distill_info = self._run_memory_distill(workspace_id, session_id)
-                if distill_info:
-                    result["session_prompt_tokens_total"] = distill_info["session_prompt_tokens_total"]
-                    result["session_completion_tokens_total"] = distill_info["session_completion_tokens_total"]
-            result["memory_distill"] = distill_info
-            result["summary_update"] = summary_info
+            await self._finalize_turn(workspace_id, session_id, message, result, session_totals)
             return result
 
         memories = self.memory_retrieval.retrieve(workspace_id, message)
         retrieved_memories_count = len(memories)
-        context = self.context_builder.build(
+        messages = self.context_builder.build(
             workspace=workspace,
             session=session,
             memories=memories,
@@ -129,8 +107,8 @@ class AgentRuntime:
             user_message=message,
             skill_instructions=skill_instructions,
         )
-        context_chars = len(context)
-        context_tokens_estimate = estimate_tokens(context)
+        context_chars = sum(len(m.get("content", "")) for m in messages)
+        context_tokens_estimate = estimate_tokens(" ".join(m.get("content", "") for m in messages))
 
         if not effective_tools:
             result = {
@@ -147,35 +125,12 @@ class AgentRuntime:
                 "session_prompt_tokens_total": int(session_totals.get("input", 0)),
                 "session_completion_tokens_total": int(session_totals.get("output", 0)),
             }
-            self.session_manager.append_transcript(
-                workspace_id,
-                session_id,
-                {
-                    "role": "assistant",
-                    "content": result["answer"],
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                },
-            )
-            summary_info = self.session_manager.schedule_summary_update(
-                workspace_id,
-                session_id,
-                result["answer"],
-                user_message=message,
-            )
-            turn_count = self.session_manager.increment_turn_count(workspace_id, session_id)
-            distill_info = None
-            if turn_count % self.memory_distill_every_turns == 0:
-                distill_info = self._run_memory_distill(workspace_id, session_id)
-                if distill_info:
-                    result["session_prompt_tokens_total"] = distill_info["session_prompt_tokens_total"]
-                    result["session_completion_tokens_total"] = distill_info["session_completion_tokens_total"]
-            result["memory_distill"] = distill_info
-            result["summary_update"] = summary_info
+            await self._finalize_turn(workspace_id, session_id, message, result, session_totals)
             return result
 
-        result = self.loop.run(
+        result = await self.loop.run(
             provider=self.provider,
-            context=context,
+            messages=messages,
             tools=effective_tools,
             execute_tool=lambda name, tool_input: self._execute_tool(
                 workspace_id, session_id, name, tool_input
@@ -189,7 +144,28 @@ class AgentRuntime:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        result["context_chars"] = context_chars
+        result["context_tokens_estimate"] = context_tokens_estimate
+        result["retrieved_memories_count"] = retrieved_memories_count
+        result["memory_retrieval_mode"] = memory_retrieval_mode
+        result["session_prompt_tokens_total"] = int(totals.get("input", 0))
+        result["session_completion_tokens_total"] = int(totals.get("output", 0))
+        self.memory_writer.maybe_store(workspace_id, message, result["answer"])
+        await self._finalize_turn(workspace_id, session_id, message, result, totals)
+        return result
 
+    async def flush_memory(self, workspace_id: str, session_id: str) -> dict:
+        info = await self._run_memory_distill(workspace_id, session_id)
+        return info or {"ran": False, "saved": 0, "prompt_tokens": 0, "completion_tokens": 0, "mode": "none"}
+
+    async def _finalize_turn(
+        self,
+        workspace_id: str,
+        session_id: str,
+        message: str,
+        result: dict,
+        token_totals: dict,
+    ) -> None:
         self.session_manager.append_transcript(
             workspace_id,
             session_id,
@@ -199,35 +175,23 @@ class AgentRuntime:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
-        summary_info = self.session_manager.schedule_summary_update(
-            workspace_id,
-            session_id,
-            result["answer"],
-            user_message=message,
-        )
-        self.memory_writer.maybe_store(workspace_id, message, result["answer"])
         turn_count = self.session_manager.increment_turn_count(workspace_id, session_id)
+        summary_info = None
+        if turn_count % self.summary_every_turns == 0:
+            summary_info = self.session_manager.schedule_summary_update(
+                workspace_id, session_id, result["answer"], user_message=message
+            )
         distill_info = None
         if turn_count % self.memory_distill_every_turns == 0:
-            distill_info = self._run_memory_distill(workspace_id, session_id)
-        result["context_chars"] = context_chars
-        result["context_tokens_estimate"] = context_tokens_estimate
-        result["retrieved_memories_count"] = retrieved_memories_count
-        result["memory_retrieval_mode"] = memory_retrieval_mode
+            distill_info = await self._run_memory_distill(workspace_id, session_id)
+        result["summary_update"] = summary_info
+        result["memory_distill"] = distill_info
         if distill_info:
             result["session_prompt_tokens_total"] = distill_info["session_prompt_tokens_total"]
             result["session_completion_tokens_total"] = distill_info["session_completion_tokens_total"]
         else:
-            result["session_prompt_tokens_total"] = int(totals.get("input", 0))
-            result["session_completion_tokens_total"] = int(totals.get("output", 0))
-        result["memory_distill"] = distill_info
-        result["summary_update"] = summary_info
-
-        return result
-
-    def flush_memory(self, workspace_id: str, session_id: str) -> dict:
-        info = self._run_memory_distill(workspace_id, session_id)
-        return info or {"ran": False, "saved": 0, "prompt_tokens": 0, "completion_tokens": 0, "mode": "none"}
+            result["session_prompt_tokens_total"] = int(token_totals.get("input", 0))
+            result["session_completion_tokens_total"] = int(token_totals.get("output", 0))
 
     def _execute_tool(self, workspace_id: str, session_id: str, name: str, tool_input: dict) -> str:
         output = self.tool_executor.execute(workspace_id, name, tool_input)
@@ -238,8 +202,8 @@ class AgentRuntime:
         )
         return output
 
-    def _run_memory_distill(self, workspace_id: str, session_id: str) -> dict | None:
-        info = self.memory_distiller.distill_session(workspace_id, session_id)
+    async def _run_memory_distill(self, workspace_id: str, session_id: str) -> dict | None:
+        info = await self.memory_distiller.distill_session(workspace_id, session_id)
         if not info.get("ran"):
             return info
         totals = self.session_manager.add_token_usage(
